@@ -1,5 +1,5 @@
-// Подключаем нативный Bluetooth-плагин Capacitor
-const { BluetoothLe } = Capacitor.Plugins;
+// Безопасное получение BluetoothLe из Capacitor
+const BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
 const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const CHARACTERISTIC_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
@@ -12,10 +12,21 @@ let reconnectTimer = null;
 // 1. Инициализация при старте приложения
 document.addEventListener("DOMContentLoaded", async () => {
   try {
+    if (!BluetoothLe) {
+      console.error("[BLE Native] Плагин BluetoothLe не инициализирован");
+      return;
+    }
+
     // Инициализируем плагин и запрашиваем разрешения Android
     await BluetoothLe.initialize();
     await BluetoothLe.requestPermissions();
     console.log("[BLE Native] Плагин готов");
+
+    // Подгружаем имя устройства из памяти, если оно за сохранено
+    const savedName = localStorage.getItem("savedDeviceName");
+    if (savedName) {
+      document.getElementById('deviceName').innerText = savedName;
+    }
 
     // Если устройство уже привязывалось — сразу подключаемся автоматически
     const savedId = localStorage.getItem("savedDeviceId");
@@ -58,9 +69,12 @@ async function selectNewDevice() {
 
     if (device && device.deviceId) {
       connectedDeviceId = device.deviceId;
+      const devName = device.name || "ESP32_Autoclave";
+
       localStorage.setItem("savedDeviceId", connectedDeviceId);
-      document.getElementById('deviceName').innerText = device.name || "ESP32_Autoclave";
-      
+      localStorage.setItem("savedDeviceName", devName);
+      document.getElementById('deviceName').innerText = devName;
+
       isExplicitDisconnect = false;
       connectNativeBLE(connectedDeviceId);
     }
@@ -87,15 +101,15 @@ async function connectNativeBLE(deviceId) {
       deviceId,
       service: SERVICE_UUID,
       characteristic: CHARACTERISTIC_TX_UUID
-    }, (value) => {
-      handleTelemetry(value);
+    }, (result) => {
+      handleTelemetry(result);
     });
 
     updateUI("connected");
 
   } catch (err) {
     console.error("[BLE Native] Ошибка соединения:", err);
-    
+
     if (!isExplicitDisconnect) {
       updateUI("reconnecting");
       scheduleReconnect(3000);
@@ -115,8 +129,7 @@ async function disconnectBLE() {
       await BluetoothLe.disconnect({ deviceId: connectedDeviceId });
     } catch (e) {}
   }
-  
-  rxCharacteristic = null;
+
   updateUI("disconnected");
 }
 
@@ -158,16 +171,28 @@ function updateUI(state) {
 }
 
 // Прием данных
-function handleTelemetry(dataView) {
+function handleTelemetry(result) {
   try {
-    const bytes = new Uint8Array(dataView.buffer || dataView);
+    const rawVal = result.value || result;
+    let bytes;
+
+    if (rawVal instanceof DataView) {
+      bytes = new Uint8Array(rawVal.buffer);
+    } else if (rawVal.buffer) {
+      bytes = new Uint8Array(rawVal.buffer);
+    } else if (Array.isArray(rawVal)) {
+      bytes = new Uint8Array(rawVal);
+    } else {
+      bytes = new Uint8Array(rawVal);
+    }
+
     const jsonStr = new TextDecoder().decode(bytes);
     const data = JSON.parse(jsonStr);
-    
+
     if (data.t_c !== undefined) document.getElementById('tempCube').innerText = data.t_c + " °C";
     if (data.pwr !== undefined) document.getElementById('pwr').innerText = data.pwr + " Вт";
   } catch (e) {
-    // Игнорируем битые пакеты
+    // Игнорируем неполные кадры
   }
 }
 
@@ -180,8 +205,6 @@ async function sendCmd(cmd) {
   try {
     const encoder = new TextEncoder();
     const encoded = encoder.encode(cmd);
-    
-    // Преобразуем в обычный массив для плагина
     const numbers = Array.from(encoded);
 
     await BluetoothLe.write({
