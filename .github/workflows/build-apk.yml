@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -56,12 +59,18 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      # Публикуем прямое скачивание APK в GitHub Releases
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rectification-app
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: android/app/build/outputs/apk/debug/app-debug.apk
           tag_name: latest
           name: "Автоматическая сборка"
+          allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
