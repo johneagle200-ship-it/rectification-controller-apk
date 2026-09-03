@@ -64,7 +64,7 @@ async function selectNewDevice() {
     // Сканируем и выбираем ESP32
     const device = await BluetoothLe.requestDevice({
       services: [SERVICE_UUID],
-      namePrefix: 'ESP32'
+      namePrefix: 'JE_'
     });
 
     if (device && device.deviceId) {
