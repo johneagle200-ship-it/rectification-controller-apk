@@ -1,3 +1,8 @@
+// Константы версии и репозитория
+const CURRENT_VERSION = "1.0.6";
+const REPO_OWNER = "johneagle200-ship-it";
+const REPO_NAME = "rectification-controller-apk";
+
 // Безопасное получение BluetoothLe из Capacitor
 const BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
@@ -11,6 +16,9 @@ let reconnectTimer = null;
 
 // 1. Инициализация при старте приложения
 document.addEventListener("DOMContentLoaded", async () => {
+  // Проверяем обновления через 3 секунды после запуска
+  setTimeout(checkForUpdates, 3000);
+
   try {
     if (!BluetoothLe) {
       console.error("[BLE Native] Плагин BluetoothLe не инициализирован");
@@ -22,7 +30,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await BluetoothLe.requestPermissions();
     console.log("[BLE Native] Плагин готов");
 
-    // Подгружаем имя устройства из памяти, если оно за сохранено
+    // Подгружаем имя устройства из памяти, если оно сохранено
     const savedName = localStorage.getItem("savedDeviceName");
     if (savedName) {
       document.getElementById('deviceName').innerText = savedName;
@@ -40,7 +48,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-// 2. Главный вызов по кнопке "Подключиться"
+// 2. Проверка обновлений с GitHub Releases
+async function checkForUpdates() {
+  try {
+    const response = await fetch(`https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/package.json`);
+    if (!response.ok) return;
+    const remotePackage = await response.json();
+    
+    if (remotePackage.version && remotePackage.version !== CURRENT_VERSION) {
+      showUpdateModal(remotePackage.version);
+    }
+  } catch (err) {
+    console.log("[UpdateCheck] Не удалось проверить обновления:", err);
+  }
+}
+
+function showUpdateModal(newVersion) {
+  const apkUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/latest/app-debug.apk`;
+  
+  if (confirm(`Доступна новая версия v${newVersion}! Скачать и установить?`)) {
+    window.open(apkUrl, '_system');
+  }
+}
+
+// 3. Главный вызов по кнопке "Подключиться"
 async function connectOrReconnect() {
   isExplicitDisconnect = false;
   clearTimeout(reconnectTimer);
@@ -53,7 +84,7 @@ async function connectOrReconnect() {
   }
 }
 
-// 3. Выбор нового устройства (системный поиск Android)
+// 4. Выбор нового устройства (фильтр устройств JE_)
 async function selectNewDevice() {
   try {
     isExplicitDisconnect = true;
@@ -61,15 +92,14 @@ async function selectNewDevice() {
 
     updateUI("connecting");
 
-    // Сканируем и выбираем ESP32
+    // Ищем все устройства, имя которых начинается с JE_
     const device = await BluetoothLe.requestDevice({
-      services: [SERVICE_UUID],
       namePrefix: 'JE_'
     });
 
     if (device && device.deviceId) {
       connectedDeviceId = device.deviceId;
-      const devName = device.name || "ESP32_Autoclave";
+      const devName = device.name || "JE_Device";
 
       localStorage.setItem("savedDeviceId", connectedDeviceId);
       localStorage.setItem("savedDeviceName", devName);
@@ -84,7 +114,7 @@ async function selectNewDevice() {
   }
 }
 
-// 4. Прямое соединение к GATT без участия пользователя
+// 5. Прямое соединение к GATT без участия пользователя
 async function connectNativeBLE(deviceId) {
   if (!deviceId) return;
 
@@ -119,7 +149,7 @@ async function connectNativeBLE(deviceId) {
   }
 }
 
-// 5. Отключение
+// 6. Отключение
 async function disconnectBLE() {
   isExplicitDisconnect = true;
   clearTimeout(reconnectTimer);
@@ -143,7 +173,7 @@ function scheduleReconnect(delayMs) {
   }, delayMs);
 }
 
-// 6. Обновление UI
+// 7. Обновление UI
 function updateUI(state) {
   const statusEl = document.getElementById('bleStatus');
   const btnConnect = document.getElementById('btnConnect');
