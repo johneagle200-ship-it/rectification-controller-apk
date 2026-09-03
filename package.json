@@ -1,6 +1,6 @@
 {
   "name": "rectification-controller-apk",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "BLE Rectification Controller",
   "scripts": {
     "build": "echo 'No build step required'"
