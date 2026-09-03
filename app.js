@@ -1,151 +1,136 @@
+// Подключаем нативный Bluetooth-плагин Capacitor
+const { BluetoothLe } = Capacitor.Plugins;
+
 const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const CHARACTERISTIC_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 const CHARACTERISTIC_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
-let bluetoothDevice = null;
-let rxCharacteristic = null;
-let txCharacteristic = null;
+let connectedDeviceId = null;
 let isExplicitDisconnect = false;
 let reconnectTimer = null;
 
-// 1. Инициализация при загрузке страницы
+// 1. Инициализация при старте приложения
 document.addEventListener("DOMContentLoaded", async () => {
-  await checkSavedDevices();
+  try {
+    // Инициализируем плагин и запрашиваем разрешения Android
+    await BluetoothLe.initialize();
+    await BluetoothLe.requestPermissions();
+    console.log("[BLE Native] Плагин готов");
+
+    // Если устройство уже привязывалось — сразу подключаемся автоматически
+    const savedId = localStorage.getItem("savedDeviceId");
+    if (savedId) {
+      connectedDeviceId = savedId;
+      console.log("[BLE Native] Автоподключение к:", savedId);
+      connectNativeBLE(savedId);
+    }
+  } catch (err) {
+    console.error("[BLE Native] Ошибка инициализации:", err);
+  }
 });
 
-// 2. Проверка ранее привязанных устройств и автоподключение
-async function checkSavedDevices() {
-  if (navigator.bluetooth && navigator.bluetooth.getDevices) {
-    try {
-      const devices = await navigator.bluetooth.getDevices();
-      if (devices.length > 0) {
-        bluetoothDevice = devices[0];
-        document.getElementById('deviceName').innerText = bluetoothDevice.name || "ESP32_Autoclave";
-        
-        console.log("[BLE] Найдено запомненное устройство, пробуем подключиться...");
-        // Автоматически подключаемся без вызова окна
-        await bindAndConnect(bluetoothDevice);
-      }
-    } catch (err) {
-      console.warn("[BLE] Автоподключение отклонено браузером (нужен клик):", err);
-      updateUI("disconnected");
-    }
-  }
-}
-
-// 3. Главная точка входа для кнопки "Подключиться"
+// 2. Главный вызов по кнопке "Подключиться"
 async function connectOrReconnect() {
   isExplicitDisconnect = false;
   clearTimeout(reconnectTimer);
 
-  if (bluetoothDevice) {
-    await bindAndConnect(bluetoothDevice);
+  const savedId = localStorage.getItem("savedDeviceId");
+  if (savedId) {
+    connectNativeBLE(savedId);
   } else {
-    await selectNewDevice();
+    selectNewDevice();
   }
 }
 
-// 4. Выбор НОВОГО устройства (открывает системное диалоговое окно)
+// 3. Выбор нового устройства (системный поиск Android)
 async function selectNewDevice() {
   try {
-    isExplicitDisconnect = true; // Сбрасываем таймеры автореконнекта старого устройства
+    isExplicitDisconnect = true;
     clearTimeout(reconnectTimer);
 
-    if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-      bluetoothDevice.gatt.disconnect();
-    }
+    updateUI("connecting");
 
-    bluetoothDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'ESP32' }],
-      optionalServices: [SERVICE_UUID]
+    // Сканируем и выбираем ESP32
+    const device = await BluetoothLe.requestDevice({
+      services: [SERVICE_UUID],
+      namePrefix: 'ESP32'
     });
 
-    isExplicitDisconnect = false;
-    document.getElementById('deviceName').innerText = bluetoothDevice.name || "ESP32_Autoclave";
-    await bindAndConnect(bluetoothDevice);
-
+    if (device && device.deviceId) {
+      connectedDeviceId = device.deviceId;
+      localStorage.setItem("savedDeviceId", connectedDeviceId);
+      document.getElementById('deviceName').innerText = device.name || "ESP32_Autoclave";
+      
+      isExplicitDisconnect = false;
+      connectNativeBLE(connectedDeviceId);
+    }
   } catch (err) {
-    console.log("[BLE] Выбор устройства отменён:", err);
+    console.log("[BLE Native] Выбор устройства отменен:", err);
     updateUI("disconnected");
   }
 }
 
-// 5. Установление GATT-сессии
-async function bindAndConnect(device) {
-  if (!device) return;
+// 4. Прямое соединение к GATT без участия пользователя
+async function connectNativeBLE(deviceId) {
+  if (!deviceId) return;
 
   try {
     clearTimeout(reconnectTimer);
     updateUI("connecting");
-    
-    device.removeEventListener('gattserverdisconnected', onDisconnected);
-    device.addEventListener('gattserverdisconnected', onDisconnected);
 
-    console.log("[BLE] Соединение с GATT...");
-    const server = await device.gatt.connect();
-    
-    const service = await server.getPrimaryService(SERVICE_UUID);
-    rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_RX_UUID);
-    txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_TX_UUID);
+    // Нативное подключение Android (работает в фоне!)
+    await BluetoothLe.connect({ deviceId });
+    console.log("[BLE Native] Подключено к GATT!");
 
-    await txCharacteristic.startNotifications();
-    txCharacteristic.removeEventListener('characteristicvaluechanged', handleTelemetry);
-    txCharacteristic.addEventListener('characteristicvaluechanged', handleTelemetry);
+    // Подписка на прием данных (TX)
+    await BluetoothLe.startNotifications({
+      deviceId,
+      service: SERVICE_UUID,
+      characteristic: CHARACTERISTIC_TX_UUID
+    }, (value) => {
+      handleTelemetry(value);
+    });
 
     updateUI("connected");
-    console.log("[BLE] Успешно подключено!");
 
   } catch (err) {
-    console.error("[BLE] Ошибка GATT:", err);
+    console.error("[BLE Native] Ошибка соединения:", err);
     
     if (!isExplicitDisconnect) {
       updateUI("reconnecting");
-      scheduleReconnect(2000);
+      scheduleReconnect(3000);
     } else {
       updateUI("disconnected");
     }
   }
 }
 
-// 6. Отключение по кнопке пользователя
-function disconnectBLE() {
+// 5. Отключение
+async function disconnectBLE() {
   isExplicitDisconnect = true;
   clearTimeout(reconnectTimer);
 
-  if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-    bluetoothDevice.gatt.disconnect();
+  if (connectedDeviceId) {
+    try {
+      await BluetoothLe.disconnect({ deviceId: connectedDeviceId });
+    } catch (e) {}
   }
-  onDisconnected();
-}
-
-// 7. Обработчик потери связи
-function onDisconnected() {
+  
   rxCharacteristic = null;
-  txCharacteristic = null;
-
-  document.getElementById('tempCube').innerText = "-- °C";
-  document.getElementById('pwr').innerText = "-- Вт";
-
-  if (!isExplicitDisconnect && bluetoothDevice) {
-    console.log("[BLE] Потеря связи. Ожидание восстановления...");
-    updateUI("reconnecting");
-    scheduleReconnect(3000);
-  } else {
-    updateUI("disconnected");
-  }
+  updateUI("disconnected");
 }
 
-// Планировщик повторных попыток без наслоения таймеров
+// Таймер автоповтора
 function scheduleReconnect(delayMs) {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(() => {
-    if (!isExplicitDisconnect && bluetoothDevice) {
-      bindAndConnect(bluetoothDevice);
+    if (!isExplicitDisconnect && connectedDeviceId) {
+      connectNativeBLE(connectedDeviceId);
     }
   }, delayMs);
 }
 
-// 8. Обновление интерфейса
+// 6. Обновление UI
 function updateUI(state) {
   const statusEl = document.getElementById('bleStatus');
   const btnConnect = document.getElementById('btnConnect');
@@ -157,48 +142,55 @@ function updateUI(state) {
     btnConnect.style.display = "none";
     btnDisconnect.style.display = "inline-block";
   } 
-  else if (state === "connecting") {
-    statusEl.innerText = "Подключение...";
-    statusEl.className = "status pending";
-  }
-  else if (state === "reconnecting") {
-    statusEl.innerText = "Поиск ESP32...";
+  else if (state === "connecting" || state === "reconnecting") {
+    statusEl.innerText = state === "connecting" ? "Подключение..." : "Поиск ESP32...";
     statusEl.className = "status pending";
     btnConnect.style.display = "none";
-    btnDisconnect.style.display = "inline-block"; // Даем возможность отменить поиск
+    btnDisconnect.style.display = "inline-block";
   }
   else {
     statusEl.innerText = "Отключено";
     statusEl.className = "status";
     btnConnect.style.display = "inline-block";
-    btnConnect.innerText = bluetoothDevice ? ("Подключить " + (bluetoothDevice.name || "ESP32")) : "Найти ESP32";
+    btnConnect.innerText = connectedDeviceId ? "Подключить ESP32" : "Найти ESP32";
     btnDisconnect.style.display = "none";
   }
 }
 
-// Прием телеметрии
-function handleTelemetry(event) {
-  const decoder = new TextDecoder('utf-8');
-  const jsonStr = decoder.decode(event.target.value);
+// Прием данных
+function handleTelemetry(dataView) {
   try {
+    const bytes = new Uint8Array(dataView.buffer || dataView);
+    const jsonStr = new TextDecoder().decode(bytes);
     const data = JSON.parse(jsonStr);
+    
     if (data.t_c !== undefined) document.getElementById('tempCube').innerText = data.t_c + " °C";
     if (data.pwr !== undefined) document.getElementById('pwr').innerText = data.pwr + " Вт";
   } catch (e) {
-    console.log("Raw RX:", jsonStr);
+    // Игнорируем битые пакеты
   }
 }
 
 // Отправка команд
 async function sendCmd(cmd) {
-  if (!rxCharacteristic) {
+  if (!connectedDeviceId) {
     alert("Устройство не подключено!");
     return;
   }
   try {
     const encoder = new TextEncoder();
-    await rxCharacteristic.writeValue(encoder.encode(cmd));
+    const encoded = encoder.encode(cmd);
+    
+    // Преобразуем в обычный массив для плагина
+    const numbers = Array.from(encoded);
+
+    await BluetoothLe.write({
+      deviceId: connectedDeviceId,
+      service: SERVICE_UUID,
+      characteristic: CHARACTERISTIC_RX_UUID,
+      value: numbers
+    });
   } catch (e) {
-    console.error("Ошибка отправки команды:", e);
+    console.error("[BLE Native] Ошибка отправки:", e);
   }
 }
