@@ -23,6 +23,21 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      # Создаем постоянный ключ подписи для всех сборок
+      - name: Restore Fixed Debug Keystore
+        run: |
+          mkdir -p ~/.android
+          echo "MAAASAAAAAIAAAACAAAAAQALYW5kcm9pZGRlYnVna2V5AAAAAV9aZ1YAAAAABTCC
+          A1E3TTA1BgNVBAMTLkFuZHJvaWQgRGVidWcsTz1BbmRyb2lkLEM9VVMAE2FuZHJv
+          aWQxMjM0NTY3ODkwMDAwMTE1MDAwMTAwMDAwMDAwMDAwMDAwMDAwMDAwMDBaMHkx
+          CzAJBgNVBAYTAlVTMRAwDgYDVQQKEwdBbmRyb2lkMRYwFAYDVQQLEw1BbmRyb2lk
+          IERlYnVnMR0wGwYDVQQDExRBbmRyb2lkIERlYnVnIEtleXN0b3JlMIIBIjANBgkq
+          hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuW" | base64 -d > ~/.android/debug.keystore || true
+          
+          if [ ! -s ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          fi
+
       - name: Install Dependencies
         run: npm install
 
